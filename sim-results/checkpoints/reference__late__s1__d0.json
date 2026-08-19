@@ -1,0 +1,85 @@
+{
+  "dgp_seed": 0,
+  "methods": [
+    {
+      "alpha": NaN,
+      "holdout_valid_pAUC": 0.7008530218539353,
+      "method": "R0_benchmark",
+      "observed_valid_pAUC": 0.6094041190756624,
+      "positives": 25528,
+      "rows": 791368,
+      "seed": 1,
+      "test_pAUC": 0.7182719056846552,
+      "valid_pAUC": 0.7266902188610935
+    },
+    {
+      "alpha": NaN,
+      "holdout_valid_pAUC": 0.648424225304451,
+      "method": "R1_holdout_only",
+      "observed_valid_pAUC": 0.5679121374403062,
+      "positives": 1242,
+      "rows": 38502,
+      "seed": 1,
+      "test_pAUC": 0.6864780779924647,
+      "valid_pAUC": 0.648424225304451
+    },
+    {
+      "alpha": NaN,
+      "holdout_valid_pAUC": 0.6264469754216715,
+      "method": "R2_unflagged_only",
+      "observed_valid_pAUC": 0.6024034328569221,
+      "positives": 14207,
+      "rows": 440417,
+      "seed": 1,
+      "test_pAUC": 0.6460746931073793,
+      "valid_pAUC": 0.6264469754216715
+    },
+    {
+      "alpha": 0.05,
+      "holdout_valid_pAUC": 0.6698083222087278,
+      "method": "R3_drop_unweighted",
+      "observed_valid_pAUC": 0.6069375481661682,
+      "positives": 14764,
+      "rows": 457684,
+      "seed": 1,
+      "test_pAUC": 0.6930822055275351,
+      "valid_pAUC": 0.6698083222087278
+    },
+    {
+      "alpha": 1.0,
+      "holdout_valid_pAUC": 0.6779071784893383,
+      "method": "R4_ipw_pure",
+      "observed_valid_pAUC": 0.6118056188776336,
+      "positives": 14764,
+      "rows": 457684,
+      "seed": 1,
+      "test_pAUC": 0.700365576124767,
+      "valid_pAUC": 0.6779071784893383
+    },
+    {
+      "alpha": NaN,
+      "holdout_valid_pAUC": 0.6259647100265795,
+      "method": "R6_no_retrain",
+      "observed_valid_pAUC": 0.5406385948615903,
+      "positives": 25616,
+      "rows": 794096,
+      "seed": 1,
+      "test_pAUC": 0.6645902605184398,
+      "valid_pAUC": 0.6259647100265795
+    },
+    {
+      "alpha": NaN,
+      "holdout_valid_pAUC": 0.6380019873731544,
+      "method": "R7_incremental",
+      "observed_valid_pAUC": 0.5481751553569595,
+      "positives": 14764,
+      "rows": 457684,
+      "seed": 1,
+      "test_pAUC": 0.6693416304395384,
+      "valid_pAUC": 0.6380019873731544
+    }
+  ],
+  "period": "late",
+  "scenario_id": "reference",
+  "seed": 1
+}

@@ -1,0 +1,7 @@
+scenario_id,label,region_shift,drift_per_month,region_drift_per_month,trigger_rate,holdout_pct,base_rate,policy_noise,amount_weight
+no_shift,No regional shift,0.0,0.02,0.0,0.06,0.05,0.01,1.8,0.7
+low_shift,Low shift + regional drift,0.25,0.02,0.02,0.06,0.05,0.01,1.8,0.7
+reference,Reference,1.5,0.02,0.0,0.06,0.05,0.01,1.8,0.7
+reference_drift,Reference + regional drift,1.5,0.02,0.02,0.06,0.05,0.01,1.8,0.7
+high_trigger_low_holdout,No shift; 12% trigger; 2% holdout,0.0,0.02,0.0,0.12,0.02,0.01,1.8,0.7
+low_base_high_holdout,0.1% base rate; 20% holdout,1.5,0.02,0.0,0.06,0.2,0.001,1.8,0.7

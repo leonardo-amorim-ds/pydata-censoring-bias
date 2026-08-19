@@ -1,0 +1,19 @@
+{
+  "dgp_seed": 0,
+  "interval": "two-sided 95%",
+  "n_workers": 5,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "source_hashes": {
+    "censoring_sim.py": "3e6f34aeccdc54fa",
+    "sim_core.py": "1662fb0fbb668675",
+    "study.py": "4a75fb958a9f30b7"
+  },
+  "study_version": 3,
+  "threads_per_worker": 12
+}

@@ -1,0 +1,85 @@
+{
+  "dgp_seed": 0,
+  "drift_per_month": 0.01,
+  "seed": 1,
+  "trajectory": [
+    {
+      "month": 0,
+      "pAUC": 0.6073603421424436,
+      "positives": 4140,
+      "rows": 419897
+    },
+    {
+      "month": 1,
+      "pAUC": 0.6007868150457235,
+      "positives": 4202,
+      "rows": 420141
+    },
+    {
+      "month": 2,
+      "pAUC": 0.6132965199301358,
+      "positives": 4254,
+      "rows": 420217
+    },
+    {
+      "month": 3,
+      "pAUC": 0.6049836590145932,
+      "positives": 4274,
+      "rows": 419080
+    },
+    {
+      "month": 4,
+      "pAUC": 0.6023949768484719,
+      "positives": 4162,
+      "rows": 420497
+    },
+    {
+      "month": 5,
+      "pAUC": 0.597237328650966,
+      "positives": 4126,
+      "rows": 419228
+    },
+    {
+      "month": 6,
+      "pAUC": 0.6035161541312833,
+      "positives": 4239,
+      "rows": 420142
+    },
+    {
+      "month": 7,
+      "pAUC": 0.5917580958543931,
+      "positives": 4420,
+      "rows": 419770
+    },
+    {
+      "month": 8,
+      "pAUC": 0.6061476728103219,
+      "positives": 4291,
+      "rows": 418434
+    },
+    {
+      "month": 9,
+      "pAUC": 0.6036347642049436,
+      "positives": 4149,
+      "rows": 420555
+    },
+    {
+      "month": 10,
+      "pAUC": 0.5886730271663944,
+      "positives": 4268,
+      "rows": 420398
+    },
+    {
+      "month": 11,
+      "pAUC": 0.5899882957850487,
+      "positives": 4025,
+      "rows": 419865
+    },
+    {
+      "month": 12,
+      "pAUC": 0.5862710476055908,
+      "positives": 4184,
+      "rows": 420000
+    }
+  ]
+}
