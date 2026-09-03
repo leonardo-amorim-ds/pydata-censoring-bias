@@ -183,23 +183,31 @@ def _features(pool):
     return columns + ["log_amount"]
 
 
-def _scores(model, valid, test, features, benchmark=False):
+def _scores(model, valid, test, features, holdout_pct, benchmark=False):
     valid_prediction = model.predict_proba(valid[features])[:, 1]
     holdout = valid.is_holdout.values
-    observed = ~valid.is_flagged.values
+    unflagged = ~valid.is_flagged.values
+    observable = unflagged | holdout
+    observable_frame = valid.loc[observable]
+    observation_weight = np.where(
+        observable_frame.is_flagged.values, 1.0 / holdout_pct, 1.0)
     holdout_score = core.partial_auc(valid.loc[holdout, Y], valid_prediction[holdout])
-    observed_score = core.partial_auc(valid.loc[observed, Y], valid_prediction[observed])
+    observed_score = core.partial_auc(valid.loc[unflagged, Y], valid_prediction[unflagged])
+    oracle_score = core.partial_auc(valid[Y], valid_prediction)
     return {
-        "valid_pAUC": (core.partial_auc(valid[Y], valid_prediction)
-                       if benchmark else holdout_score),
+        "valid_pAUC": oracle_score if benchmark else holdout_score,
         "holdout_valid_pAUC": holdout_score,
         "observed_valid_pAUC": observed_score,
-        "test_pAUC": core.partial_auc(test[Y], model.predict_proba(test[features])[:, 1]),
+        "weighted_valid_pAUC": core.weighted_partial_auc(
+            observable_frame[Y], valid_prediction[observable], observation_weight),
+        "oracle_valid_pAUC": oracle_score,
+        "test_pAUC": (core.partial_auc(
+            test[Y], model.predict_proba(test[features])[:, 1])
+            if test is not None else np.nan),
     }
 
 
-def _fit(pool, valid, test, features, mode, config, seed,
-         ipw_alpha=1.0, full_history=False):
+def _fit(pool, valid, test, features, mode, config, seed, full_history=False):
     X, y, weights, info = core.build_train_set(
         pool,
         mode,
@@ -209,12 +217,15 @@ def _fit(pool, valid, test, features, mode, config, seed,
         holdout_pct=config["holdout_pct"],
         neg_pos_ratio=config["neg_pos_ratio"],
         seed=seed,
-        ipw_alpha=ipw_alpha,
         launch_date=config["launch_date"],
     )
     model = LGBMClassifier(**SIM_PARAMS, random_state=seed)
     model.fit(X, y, sample_weight=weights)
-    return {**_scores(model, valid, test, features, benchmark=mode == "benchmark"), **info}
+    return {
+        **_scores(model, valid, test, features, config["holdout_pct"],
+                  benchmark=mode == "benchmark"),
+        **info,
+    }
 
 
 def _fit_incremental(pool, valid, test, features, config, seed):
@@ -236,33 +247,49 @@ def _fit_incremental(pool, valid, test, features, config, seed):
         X1, y1, sample_weight=w1, init_model=base.booster_,
         eval_set=[(valid_holdout[features], valid_holdout[Y])], eval_metric="auc",
         callbacks=[early_stopping(20, verbose=False)])
-    return {**_scores(continued, valid, test, features), **info}
+    return {
+        **_scores(continued, valid, test, features, config["holdout_pct"]),
+        **info,
+    }
 
 
 def run_methods(pool, valid, test, config, seed=0):
-    """Fit the seven actual models. Asymmetric IPW is selected after pooling seeds."""
+    """Fit the seven actual models. Asymmetric IPW is selected during aggregation."""
     features = _features(pool)
     rows = []
 
-    def record(method, values, alpha=np.nan):
+    def record(method, values):
         rows.append({
             "method": method,
-            "alpha": alpha,
             "seed": seed,
             **values,
         })
 
     for method, mode in STANDARD_METHODS:
-        alpha = config["holdout_pct"] if mode == "drop_unweighted" else np.nan
-        record(method, _fit(pool, valid, test, features, mode, config, seed), alpha)
+        record(method, _fit(pool, valid, test, features, mode, config, seed))
     record("R4_ipw_pure", _fit(
-        pool, valid, test, features, "ipw", config, seed,
-        ipw_alpha=1.0), alpha=1.0)
+        pool, valid, test, features, "ipw", config, seed))
     record("R6_no_retrain", _fit(
         pool, valid, test, features, "pre_launch_only", config, seed,
         full_history=True))
     record("R7_incremental", _fit_incremental(
         pool, valid, test, features, config, seed))
+    return pd.DataFrame(rows)
+
+
+def run_selector_endpoints(pool, valid, config, seed=0):
+    """Fit the two Asymmetric-IPW candidates for one realized cycle."""
+    features = _features(pool)
+    rows = []
+    for method, mode in (
+        ("R3_drop_unweighted", "drop_unweighted"),
+        ("R4_ipw_pure", "ipw"),
+    ):
+        rows.append({
+            "method": method,
+            "seed": seed,
+            **_fit(pool, valid, None, features, mode, config, seed),
+        })
     return pd.DataFrame(rows)
 
 

@@ -1,7 +1,17 @@
 {
   "dgp_seed": 0,
   "interval": "two-sided 95%",
-  "n_workers": 5,
+  "n_workers": 8,
+  "policy_feedback": "stable-policy approximation",
+  "result_provenance": {
+    "model_fit_source_hashes": {
+      "censoring_sim.py": "fd1c6860fbd1d982",
+      "sim_core.py": "8f265af41aa24e7d",
+      "study.py": "5af00318ddf59c0e"
+    },
+    "numeric_results_reused": true,
+    "post_run_change": "Removed unused endpoint interpolation parameter; dropping and IPW weights are unchanged"
+  },
   "seeds": [
     0,
     1,
@@ -9,11 +19,13 @@
     3,
     4
   ],
+  "selector_score": "observation_weighted_pAUC",
+  "selector_window": 6,
   "source_hashes": {
-    "censoring_sim.py": "3e6f34aeccdc54fa",
-    "sim_core.py": "1662fb0fbb668675",
-    "study.py": "4a75fb958a9f30b7"
+    "censoring_sim.py": "d8e216a3916aaaad",
+    "sim_core.py": "509734ae1138821c",
+    "study.py": "2bd9e8f593696626"
   },
-  "study_version": 3,
-  "threads_per_worker": 12
+  "study_version": 5,
+  "threads_per_worker": 8
 }

@@ -32,6 +32,24 @@ def partial_auc(y_true, y_scores, max_fpr=MAX_FPR):
     return auc(fpr_restricted, tpr_restricted) / max_fpr
 
 
+def weighted_partial_auc(y_true, y_scores, sample_weight, max_fpr=MAX_FPR):
+    """Normalized partial AUC with explicit observation weights."""
+    y_true = np.asarray(y_true)
+    if len(np.unique(y_true)) < 2:
+        return 0.5
+    fpr, tpr, _ = roc_curve(
+        y_true, y_scores, sample_weight=np.asarray(sample_weight),
+        drop_intermediate=True)
+    stop = np.searchsorted(fpr, max_fpr, side="right")
+    fpr_restricted = fpr[:stop]
+    tpr_restricted = tpr[:stop]
+    if fpr_restricted[-1] < max_fpr:
+        fpr_restricted = np.append(fpr_restricted, max_fpr)
+        tpr_restricted = np.append(
+            tpr_restricted, np.interp(max_fpr, fpr, tpr))
+    return auc(fpr_restricted, tpr_restricted) / max_fpr
+
+
 def _require_labels(frame, mode):
     if frame[Y_DEFAULT].dtype == object:
         raise ValueError(f"mode={mode}: {Y_DEFAULT} must be bool or numeric")
@@ -50,7 +68,6 @@ def build_train_set(
     holdout_pct,
     neg_pos_ratio,
     seed,
-    ipw_alpha=1.0,
     launch_date=None,
 ):
     """Apply the time window, row filter, weights, then negative undersampling."""
@@ -87,7 +104,7 @@ def build_train_set(
     frame = pool[keep].copy()
     if mode == "ipw":
         frame["sample_weight"] = np.where(
-            frame["is_flagged"].values, ipw_alpha / holdout_pct, 1.0)
+            frame["is_flagged"].values, 1.0 / holdout_pct, 1.0)
     else:
         frame["sample_weight"] = 1.0
 

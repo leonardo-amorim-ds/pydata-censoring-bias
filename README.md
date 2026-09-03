@@ -25,9 +25,9 @@ Three mechanisms drive the experiments:
 - **Regional drift** changes that hidden relationship after launch.
 
 Six scenarios also vary trigger rate, holdout percentage and base rate. The reference uses a 1%
-base rate, 6% trigger rate, 5% randomized holdout and a strong regional signal. Every method uses the
-same LightGBM configuration and six-month rolling window. Five paired draws are evaluated one and
-twelve months after launch, with validation at M and test at M+1.
+base rate, 6% trigger rate, 5% randomized holdout and a strong regional signal. Every method uses
+the same LightGBM hyperparameters, and R0–R5 share a six-month rolling window. Five paired draws
+are evaluated one and twelve months after launch, with validation at M and test at M+1.
 
 ## Methods
 
@@ -38,13 +38,13 @@ twelve months after launch, with validation at M and test at M+1.
 | R2 | No holdout | Unflagged observations only; simulates launching without a randomized holdout |
 | R3 | Dropping | Every uncensored observation with equal weight |
 | R4 | IPW | The same rows as dropping, with flagged holdout observations weighted by `1 / holdout_pct` |
-| R5 | Asymmetric IPW | Pooled holdout validation selects dropping or IPW once per scenario-period |
+| R5 | Asymmetric IPW | Trains Dropping and IPW each cycle and selects between them using a rolling window of weighted validation pAUC |
 | R6 | No retraining | The model fitted before policy launch |
 | R7 | Incremental | The pre-launch model continued with post-launch labels that remain observable |
 
 Here, AIPW means **Asymmetric IPW**, not Augmented IPW. Dropping is the unweighted endpoint
-(`alpha = holdout_pct`); pure IPW is the fully corrected endpoint (`alpha = 1`). Selection uses
-pooled validation, never test performance or a separate choice inside each replicate.
+(every observable row has weight 1); pure IPW gives each flagged holdout row weight
+`1 / holdout_pct`. Selection never uses test performance.
 
 ## Results
 
@@ -62,9 +62,18 @@ months, the information regime determines the winner:
   Across these IPW-favoring regimes, no-holdout falls behind and weighting recovers part of the
   hidden relationship.
 
-Asymmetric IPW selects the endpoint with the higher mean test score in all six late scenarios.
-Across all twelve scenario-period comparisons, it statistically ties the fixed better endpoint and
-has the best late average deployable rank.
+Asymmetric IPW trains both Dropping and IPW and evaluates them on weighted validation data at every
+retraining cycle. This lets the selector use observable non-holdout data instead of relying on the
+small holdout alone. The selector uses a rolling window of the most recent N months (N=6 in our
+experiment) to calculate each method's average validation pAUC, then deploys the current model from
+the method with the higher average. At M1, only one month is available, so there is no history to
+pool. Test data is never used to choose.
+
+At M12, five scenarios had a clear winner between Dropping and IPW. Across the 25 corresponding
+simulation runs, Asymmetric IPW chose that winner every time. When evaluated afterward across all
+six scenarios, it chose the method with the higher mean test score for that scenario in 29 of 30
+runs. The only miss occurred in the scenario where the methods were statistically tied. At M1, the
+methods were tied in every scenario.
 
 ## Files, modules and notebooks
 
@@ -73,8 +82,10 @@ final successful Databricks execution.
 
 Notebooks:
 
-1. `01_simulation.ipynb` runs or resumes 60 method-comparison tasks and 20 drift diagnostics. Tasks
-   are checkpointed before aggregation.
+1. `01_simulation.ipynb` runs or resumes 60 method-comparison tasks and 20 drift diagnostics. At
+   M12, it also fits Dropping and IPW for the five earlier selector cycles M7–M11; the M12 cycle
+   reuses the pair already fitted for the endpoint comparison. Tasks are checkpointed before
+   aggregation.
 2. `02_results.ipynb` reads the six aggregate CSVs, reproduces the analysis and writes sixteen
    figures.
 

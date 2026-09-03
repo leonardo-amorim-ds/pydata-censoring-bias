@@ -20,7 +20,12 @@ import censoring_sim as sim
 
 PERIODS = {"early": 1, "late": 12}
 SEEDS = (0, 1, 2, 3, 4)
-STUDY_VERSION = 3
+STUDY_VERSION = 5
+SELECTOR_WINDOW = 6
+SELECTOR_ENDPOINTS = ("R3_drop_unweighted", "R4_ipw_pure")
+AGGREGATE_OUTPUTS = (
+    "method_raw", "method_summary", "endpoint_summary", "asymmetric_summary",
+)
 METHOD_ORDER = (
     "R0_benchmark",
     "R1_holdout_only",
@@ -165,12 +170,20 @@ def scenario_config(scenario, period):
     return {**BASE, **parameters, "months_post_launch": PERIODS[period]}
 
 
+def selector_months(period):
+    """Actual validation cycles available to the selector at an endpoint."""
+    target = PERIODS[period]
+    return tuple(range(max(1, target - SELECTOR_WINDOW + 1), target + 1))
+
+
 def validate_design():
     ids = [row["scenario_id"] for row in SCENARIOS]
     if len(ids) != len(set(ids)):
         raise AssertionError("scenario ids must be unique")
     if set(PERIODS) != {"early", "late"} or tuple(PERIODS.values()) != (1, 12):
         raise AssertionError("periods must remain one and twelve months post-launch")
+    if SELECTOR_WINDOW != BASE["window_months"]:
+        raise AssertionError("selector and model training windows must remain aligned")
     reference = next(row for row in SCENARIOS if row["scenario_id"] == "reference")
     expected = dict(region_shift=1.5, drift_per_month=0.02, trigger_rate=0.06,
                     holdout_pct=0.05, base_rate=0.01, policy_noise=1.8,
@@ -208,12 +221,33 @@ def evaluate_task(task, out_dir, threads_per_worker):
         pool = sim.apply_policy(pool, derived, seed)
         valid = sim.apply_policy(valid, derived, seed)
         methods = sim.run_methods(pool, valid, test, derived, seed=seed)
+        history = []
+        target_month = PERIODS[period]
+        for post_month in selector_months(period):
+            if post_month == target_month:
+                fitted = methods[methods.method.isin(SELECTOR_ENDPOINTS)]
+            else:
+                validation_month = derived["launch_month"] + post_month
+                anchor_end = sim.ORIGIN + pd.to_timedelta(validation_month * 30, unit="D")
+                cycle_config = {**derived, "anchor_end": anchor_end}
+                train_pool = pool[pool.month < validation_month]
+                cycle_valid = pool[pool.month == validation_month]
+                if cycle_valid.empty:
+                    raise ValueError(
+                        f"no validation rows for post-policy month {post_month}")
+                fitted = sim.run_selector_endpoints(
+                    train_pool, cycle_valid, cycle_config, seed=seed)
+            history.extend([
+                {"post_month": post_month, **row}
+                for row in fitted.to_dict("records")
+            ])
         _atomic_json(path, {
             "scenario_id": scenario["scenario_id"],
             "period": period,
             "seed": seed,
             "dgp_seed": dgp_seed,
             "methods": methods.to_dict("records"),
+            "selector_history": history,
         })
         _error_path(out_dir, scenario["scenario_id"], period, seed, dgp_seed).unlink(
             missing_ok=True)
@@ -269,22 +303,50 @@ def _raw_frames(records):
     method_rows = []
     for record in records:
         keys = {key: record[key] for key in ("scenario_id", "period", "seed", "dgp_seed")}
-        method_rows.extend([keys | row for row in record["methods"]])
-    raw = pd.DataFrame(method_rows)
-    if raw.empty:
-        return raw
+        methods = pd.DataFrame(record["methods"])
+        history = pd.DataFrame(record.get("selector_history", []))
+        expected_months = selector_months(record["period"])
+        observed_months = tuple(sorted(history.post_month.unique())) if len(history) else ()
+        if observed_months != expected_months:
+            raise ValueError(
+                f"{record['scenario_id']} {record['period']} seed={record['seed']}: "
+                f"expected selector months={expected_months}, found={observed_months}")
+        weighted = history.pivot(
+            index="post_month", columns="method", values="weighted_valid_pAUC")
+        oracle = history.pivot(
+            index="post_month", columns="method", values="oracle_valid_pAUC")
+        if tuple(weighted.columns.sort_values()) != tuple(sorted(SELECTOR_ENDPOINTS)):
+            raise ValueError("selector history must contain exactly dropping and IPW")
+        weighted_delta = weighted.R4_ipw_pure - weighted.R3_drop_unweighted
+        current_oracle_delta = (
+            oracle.R4_ipw_pure - oracle.R3_drop_unweighted).loc[PERIODS[record["period"]]]
+        selector_delta = weighted_delta.mean()
+        selected = ("R4_ipw_pure" if selector_delta > 0
+                    else "R3_drop_unweighted")
+        current_oracle_endpoint = (
+            "R4_ipw_pure" if current_oracle_delta > 0
+            else "R3_drop_unweighted")
 
-    asymmetric = []
-    keys = ["scenario_id", "period", "dgp_seed"]
-    for _, group in raw[raw.method.isin(
-            ["R3_drop_unweighted", "R4_ipw_pure"])].groupby(keys):
-        selected = group.groupby("method").valid_pAUC.mean().idxmax()
-        chosen = group[group.method == selected].copy()
+        methods["selected_endpoint"] = None
+        methods["selector_delta"] = np.nan
+        methods["current_oracle_validation_delta"] = np.nan
+        methods["current_oracle_endpoint"] = None
+        methods["matches_current_oracle"] = None
+        methods["selector_history_months"] = None
+        methods["selector_history_count"] = np.nan
+        method_rows.extend([keys | row for row in methods.to_dict("records")])
+
+        chosen = methods[methods.method == selected].copy()
         chosen["method"] = "R5_asymmetric"
         chosen["selected_endpoint"] = selected
-        asymmetric.append(chosen)
-    raw["selected_endpoint"] = None
-    return pd.concat([raw, *asymmetric], ignore_index=True)
+        chosen["selector_delta"] = selector_delta
+        chosen["current_oracle_validation_delta"] = current_oracle_delta
+        chosen["current_oracle_endpoint"] = current_oracle_endpoint
+        chosen["matches_current_oracle"] = selected == current_oracle_endpoint
+        chosen["selector_history_months"] = ",".join(map(str, expected_months))
+        chosen["selector_history_count"] = len(expected_months)
+        method_rows.extend([keys | row for row in chosen.to_dict("records")])
+    return pd.DataFrame(method_rows)
 
 
 def _bounds(values):
@@ -304,13 +366,20 @@ def _status(values):
     return "ties"
 
 
+def _selection_label(values):
+    endpoints = pd.Series(values).dropna().unique()
+    if not len(endpoints):
+        return None
+    return endpoints[0] if len(endpoints) == 1 else "mixed"
+
+
 def summarize_methods(raw):
     keys = ["scenario_id", "period", "dgp_seed", "method"]
     summary = (raw.groupby(keys, as_index=False)
                .agg(test_mean=("test_pAUC", "mean"), test_sd=("test_pAUC", "std"),
                     valid_mean=("valid_pAUC", "mean"), n=("seed", "nunique"),
                     training_rows=("rows", "mean"), positives=("positives", "mean"),
-                    selected_endpoint=("selected_endpoint", "first")))
+                    selected_endpoint=("selected_endpoint", _selection_label)))
     summary = summary.merge(scenario_frame(), on="scenario_id", how="left")
     ceiling = (summary[summary.method == "R0_benchmark"]
                [["scenario_id", "period", "dgp_seed", "test_mean"]]
@@ -357,7 +426,9 @@ def summarize_asymmetric(raw, method_summary):
             ("R4_ipw_pure", wide.R4_ipw_pure.mean()), key=lambda item: item[1])[0]
         gap = wide.R5_asymmetric - wide[endpoint]
         lower, upper = _bounds(gap)
-        selected = group.loc[group.method == "R5_asymmetric", "selected_endpoint"].dropna().iloc[0]
+        selected_rows = group[group.method == "R5_asymmetric"].set_index("seed")
+        selected_endpoints = selected_rows.selected_endpoint.dropna()
+        current_oracle_endpoints = selected_rows.current_oracle_endpoint.dropna()
         cell = method_summary[(method_summary.scenario_id == keys[0])
                               & (method_summary.period == keys[1])
                               & (method_summary.dgp_seed == keys[2])]
@@ -371,7 +442,19 @@ def summarize_asymmetric(raw, method_summary):
         non_endpoint_lower, non_endpoint_upper = _bounds(non_endpoint_gap)
         rows.append({
             "scenario_id": keys[0], "period": keys[1], "dgp_seed": keys[2],
-            "n": len(gap), "selected_endpoint": selected, "better_endpoint": endpoint,
+            "n": len(gap), "selected_endpoint": _selection_label(selected_endpoints),
+            "dropping_selections": int((selected_endpoints == "R3_drop_unweighted").sum()),
+            "ipw_selections": int((selected_endpoints == "R4_ipw_pure").sum()),
+            "selections_matching_better_endpoint": int((selected_endpoints == endpoint).sum()),
+            "selections_matching_current_oracle": int(
+                (selected_endpoints == current_oracle_endpoints).sum()),
+            "better_endpoint": endpoint,
+            "selector_history_months": _selection_label(
+                selected_rows.selector_history_months),
+            "selector_history_count": int(selected_rows.selector_history_count.max()),
+            "validation_contrast_mae": np.mean(np.abs(
+                selected_rows.selector_delta
+                - selected_rows.current_oracle_validation_delta)),
             "gap_vs_better_endpoint": gap.mean(), "paired_sd": gap.std(ddof=1),
             "lower_95": lower, "upper_95": upper, "result_vs_endpoint": _status(gap),
             "best_other_method": best_other.method,
@@ -405,12 +488,36 @@ def save_outputs(out_dir):
     return outputs
 
 
-def run_drift_study(here, out_name="sim-results", n_workers=5,
-                    threads_per_worker=12, seeds=SEEDS, dgp_seed=0):
+def load_outputs(out_dir):
+    """Load finalized aggregates after resumability checkpoints are removed."""
+    out_dir = Path(out_dir)
+    return {
+        name: pd.read_csv(out_dir / f"{name}.csv")
+        for name in AGGREGATE_OUTPUTS
+    }
+
+
+def _completed_progress(path, expected):
+    if not Path(path).exists():
+        return False
+    progress = _read_json(path)
+    return (progress.get("stage") == "complete"
+            and progress.get("errors") == 0
+            and progress.get("completed") == expected
+            and progress.get("total") == expected)
+
+
+def run_drift_study(here, out_name="sim-results", n_workers=8,
+                    threads_per_worker=8, seeds=SEEDS, dgp_seed=0):
     out_dir = Path(here) / out_name
     tasks = [(drift, seed, dgp_seed) for drift in DRIFT_LEVELS for seed in seeds]
-    pending = [task for task in tasks if not _drift_path(out_dir, *task).exists()]
+    existing = glob.glob(str(out_dir / "drift-checkpoints" / "*.json"))
+    trajectory_path = out_dir / "drift_trajectory.csv"
     progress_path = out_dir / "drift_progress.json"
+    if (not existing and trajectory_path.exists()
+            and _completed_progress(progress_path, len(tasks))):
+        return pd.read_csv(trajectory_path)
+    pending = [task for task in tasks if not _drift_path(out_dir, *task).exists()]
     prior_progress = _read_json(progress_path) if progress_path.exists() else {}
     started = time.time()
     for offset in range(0, len(pending), n_workers):
@@ -449,13 +556,15 @@ def _source_hash(path):
         return hashlib.sha256(handle.read()).hexdigest()[:16]
 
 
-def run_study(here, out_name="sim-results", n_workers=5, threads_per_worker=12,
+def run_study(here, out_name="sim-results", n_workers=8, threads_per_worker=8,
               seeds=SEEDS, dgp_seed=0):
     validate_design()
     here = Path(here)
     out_dir = here / out_name
     out_dir.mkdir(parents=True, exist_ok=True)
     _atomic_csv(out_dir / "scenario_definitions.csv", scenario_frame())
+    tasks = [(scenario, period, seed, dgp_seed)
+             for scenario in SCENARIOS for period in PERIODS for seed in seeds]
     manifest = {
         "study_version": STUDY_VERSION,
         "interval": "two-sided 95%",
@@ -463,27 +572,36 @@ def run_study(here, out_name="sim-results", n_workers=5, threads_per_worker=12,
         "threads_per_worker": threads_per_worker,
         "seeds": list(seeds),
         "dgp_seed": dgp_seed,
+        "selector_window": SELECTOR_WINDOW,
+        "selector_score": "observation_weighted_pAUC",
+        "policy_feedback": "stable-policy approximation",
         "source_hashes": {name: _source_hash(here / name)
                           for name in ("study.py", "censoring_sim.py", "sim_core.py")},
     }
     manifest_path = out_dir / "manifest.json"
     existing = glob.glob(str(out_dir / "checkpoints" / "*.json"))
-    if manifest_path.exists() and existing:
+    progress_path = out_dir / "progress.json"
+    finalized = (all((out_dir / f"{name}.csv").exists()
+                     for name in AGGREGATE_OUTPUTS)
+                 and _completed_progress(progress_path, len(tasks)))
+    if manifest_path.exists() and (existing or finalized):
         saved = _read_json(manifest_path)
-        comparable = ("study_version", "seeds", "dgp_seed", "source_hashes")
+        comparable = (
+            "study_version", "seeds", "dgp_seed", "selector_window",
+            "selector_score", "source_hashes")
         changed = [key for key in comparable if saved.get(key) != manifest.get(key)]
         if changed:
             raise RuntimeError(
-                f"existing checkpoints are incompatible ({', '.join(changed)}); "
+                f"existing results are incompatible ({', '.join(changed)}); "
                 "use a clean output directory")
     else:
         _atomic_json(manifest_path, manifest)
 
-    tasks = [(scenario, period, seed, dgp_seed)
-             for scenario in SCENARIOS for period in PERIODS for seed in seeds]
+    if finalized and not existing:
+        return {"out_dir": str(out_dir), **load_outputs(out_dir)}
+
     pending = [task for task in tasks if not _task_path(
         out_dir, task[0]["scenario_id"], task[1], task[2], task[3]).exists()]
-    progress_path = out_dir / "progress.json"
     prior_progress = _read_json(progress_path) if progress_path.exists() else {}
     started = time.time()
     for offset in range(0, len(pending), n_workers):
